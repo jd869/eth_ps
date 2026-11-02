@@ -10,7 +10,6 @@ A user could ask, “Send 25 tokens to Alice,” “Prepare payment for this inv
 
 **Project status:** Design and implementation roadmap. This document describes the intended prototype, proposed experiments, and acceptance targets. It does not claim that the system has been implemented or that evaluation results have been obtained.
 
-
 ## Contents
 
 - [1. Problem and objective](#1-problem-and-objective)
@@ -99,16 +98,22 @@ flowchart TD
     R --> U
 
     U -->|Explicit approval| G[Signing gateway]
-    G -->|Revalidate stored transaction| W[User-controlled signer]
-    W --> V[Decode and verify signed transaction]
-    V --> BC[Broadcast and verify execution]
-    BC --> ETH[Local Ethereum environment]
+    G -->|Revalidate stored transaction| W["User-controlled signer (Clef)"]
+    W -->|Signed transaction| V[Decode and verify signed transaction]
+    V --> BC[Broadcast signed transaction]
+    BC -->|Submit signed transaction| ETH["Local Ethereum environment (Anvil)"]
+    ETH -->|Read receipt and resulting state| EV[Verify execution and state changes]
 
-    K --> A[Redacted audit evidence]
-    G --> A
-    V --> A
-    BC --> A
+    K -.-> A[Redacted audit evidence]
+    G -.-> A
+    V -.-> A
+    BC -.-> A
+    EV -.-> A
 ```
+
+**How to read the arrows:** Solid arrows show the main processing and transaction flow. Dotted arrows record audit evidence; they do not redirect or stop the transaction flow.
+
+**Submission and execution are separate:** The broadcaster submits the signed transaction and initially receives its hash. After inclusion, the execution verifier reads the receipt, balances, and allowances from the Ethereum environment and compares the actual outcome with the approved action. Recording a transaction hash alone does not establish success.
 
 ### Component responsibilities
 
@@ -123,7 +128,9 @@ flowchart TD
 | Transaction builder | Encode supported operations using fixed templates |
 | Simulation layer | Check execution feasibility and relevant chain state |
 | Signing gateway | Bind approval to a stored transaction and recheck it before signing |
-| Existing signer | Manage keys and request the user’s approval for signatures |
+| Existing signer: Clef | Use the user’s local keystore to sign after manual approval, and return the signed transaction |
+| Broadcaster | Submit the verified signed transaction to the Ethereum environment |
+| Execution verifier | Read the receipt and resulting state, and compare them with the approved action |
 | Evidence recorder | Connect the proposal, authorization, signature, execution, and disclosures |
 
 ### Trust boundary
@@ -150,7 +157,9 @@ Consider this request:
 8. **Record approval.** Store the prepared transaction and its approval record.
 9. **Revalidate before signing.** Recheck the transaction digest, policy, account, nonce, and relevant state.
 10. **Request the user’s signature.** The local signer asks for explicit approval.
-11. **Verify and execute.** Decode the returned signed transaction, compare its fields, broadcast it, and inspect the execution result.
+11. **Verify the signed payload.** Decode the returned transaction and compare its sender and unsigned fields with the approved action.
+12. **Broadcast.** Submit that signed transaction to the Ethereum environment and record its hash.
+13. **Verify execution.** After inclusion, read the receipt and resulting balances or allowances, then compare the actual effects with the approved action. A pending or failed transaction must not be reported as a completed payment.
 
 ### Malicious invoice example
 
@@ -209,7 +218,19 @@ Approval expiry applies before signing. It does not give an ordinary Ethereum tr
 
 ### 5.5 Keep signing isolated
 
-Use Clef as the reference existing signer, with manual approval enabled. Only the gateway may access its local IPC socket. Passwords and keys stay in the signer environment; no model-facing service receives them.
+Clef is an existing signing tool from the Go Ethereum project. It uses a local encrypted keystore and performs signing in a process separate from the access layer. This lets us reuse an established signing component while keeping private keys out of model-facing services. See the [official Clef introduction](https://geth.ethereum.org/docs/tools/clef/introduction).
+
+In this design, Clef uses manual approval for every signature:
+
+1. The gateway revalidates the approved, stored transaction and requests signing through local IPC.
+2. Clef asks the user to approve the signing request. Password entry and key access stay within the signer environment.
+3. Clef returns the signed transaction through its signing API. Our application verifies the signed fields before separately broadcasting it. See the [Clef signing API](https://geth.ethereum.org/docs/tools/clef/apis#account_signtransaction).
+
+Only the gateway may access the signer socket. The model and document parser cannot reach it. Signing creates an authorized payload; sending and executing that payload happen afterward.
+
+**Division of responsibility:** The access layer checks intent, policy, budgets, field sources, and approval binding. Clef provides isolated key use and signing approval. Using Clef does not replace our permission engine or establish that the model correctly understood the request.
+
+**Why reuse Clef?** The problem statement explicitly permits existing wallet software. A user-owned local signer supports the independence requirement without requiring a team-operated signing service. Credit Clef as a reused component; the team’s contribution is the access layer and its demonstrated security properties. Scores depend on the complete system, not the signer’s name. Setup effort, a separate signing approval, and signer logs are trade-offs to measure and explain. Clef is the reference signer, not a requirement imposed by the problem statement.
 
 After signing, verify the recovered sender and transaction fields before broadcasting. A mismatch is a security failure even if broadcasting is stopped: the signature has already been produced. The signer itself remains trusted.
 
