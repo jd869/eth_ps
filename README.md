@@ -10,7 +10,6 @@ A user could ask, “Send 25 tokens to Alice,” “Prepare payment for this inv
 
 **Project status:** Design and implementation roadmap. This document describes the intended prototype, proposed experiments, and acceptance targets. It does not claim that the system has been implemented or that evaluation results have been obtained.
 
-**Planning constraints:** 3–4 team members, 2–3 weeks, and a CPU machine with 16 GB RAM. The core design requires no model training, GPU, paid inference API, or service operated by the team.
 
 ## Contents
 
